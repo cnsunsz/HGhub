@@ -1,0 +1,109 @@
+name: Build Windows
+
+# 在 GitHub 托管的 windows-latest runner 上编译 Windows 桌面端
+#（NSIS 安装包 + 便携包），并发布到本仓库 GitHub Release（tag: v{version}-windows）。
+# 触发方式：手动（workflow_dispatch）。
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+
+jobs:
+  windows:
+    name: Windows (setup + portable)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: ver
+        shell: bash
+        run: |
+          V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: 构建（NSIS 安装包）
+        run: pnpm tauri build --bundles nsis
+
+      - name: 收集产物（安装包 + 便携包）
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Copy-Item "src-tauri/target/release/bundle/nsis/*.exe" artifacts/
+          $bin = "src-tauri/target/release/huangguo-client.exe"
+          if (-not (Test-Path $bin)) {
+            $bin = (Get-ChildItem "src-tauri/target/release" -Filter *.exe | Select-Object -First 1).FullName
+          }
+          Copy-Item $bin "artifacts/HGhub.exe"
+          Compress-Archive -Path "artifacts/HGhub.exe" -DestinationPath "artifacts/HGhub_${v}_x64_portable.zip" -Force
+          Remove-Item "artifacts/HGhub.exe"
+          Get-ChildItem artifacts | Select-Object Name, Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: artifacts/*
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish GitHub Release
+    needs: [windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: 列出待发布文件
+        run: ls -lh artifacts
+
+      - name: 获取版本号
+        id: ver
+        run: |
+          V="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}-windows
+          name: HGhub v${{ steps.ver.outputs.version }} Windows
+          body: |
+            ## HGhub Windows 编译发布版 (v${{ steps.ver.outputs.version }})
+
+            本仓库为 [Minireel/HGhub](https://github.com/Minireel/HGhub) 的 fork，此 Release 提供对应源码版本（v${{ steps.ver.outputs.version }}）的 Windows 预编译产物。
+
+            ### 下载说明
+            - **安装包（推荐）**：NSIS 安装程序（`HGhub_${{ steps.ver.outputs.version }}_x64-setup.exe`）
+            - **便携版**：`HGhub_${{ steps.ver.outputs.version }}_x64_portable.zip`
+
+            未进行代码签名，Windows 首次运行可能提示“无法验证发布者”，选择“仍要运行”即可。
+          files: artifacts/*
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
