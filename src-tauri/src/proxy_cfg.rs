@@ -250,7 +250,7 @@ fn cf_system_proxy() -> Option<String> {
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod cf_proxy {
-    use std::ffi::c_void;
+    use std::ffi::{c_void, CStr};
 
     type CFTypeRef = *const c_void;
     type CFDictionaryRef = *const c_void;
@@ -268,6 +268,11 @@ mod cf_proxy {
         fn CFNumberGetTypeID() -> usize;
         fn CFBooleanGetTypeID() -> usize;
         fn CFBooleanGetValue(boolean: CFTypeRef) -> u8;
+        fn CFStringCreateWithCString(
+            alloc: *const c_void,
+            c_str: *const i8,
+            encoding: u32,
+        ) -> CFStringRef;
         fn CFStringGetCString(
             the_string: CFStringRef,
             buffer: *mut i8,
@@ -275,19 +280,15 @@ mod cf_proxy {
             encoding: u32,
         ) -> u8;
         fn CFNumberGetValue(number: CFNumberRef, the_type: i32, value_ptr: *mut c_void) -> u8;
-        static kCFNetworkProxiesHTTPEnable: CFStringRef;
-        static kCFNetworkProxiesHTTPProxy: CFStringRef;
-        static kCFNetworkProxiesHTTPPort: CFStringRef;
-        static kCFNetworkProxiesHTTPSEnable: CFStringRef;
-        static kCFNetworkProxiesHTTPSProxy: CFStringRef;
-        static kCFNetworkProxiesHTTPSPort: CFStringRef;
-        static kCFNetworkProxiesSOCKSEnable: CFStringRef;
-        static kCFNetworkProxiesSOCKSProxy: CFStringRef;
-        static kCFNetworkProxiesSOCKSPort: CFStringRef;
     }
 
     const CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
     const CF_NUMBER_SINT32_TYPE: i32 = 3;
+
+    // iOS 不导出 kCFNetworkProxiesHTTPS* / SOCKS* 符号，改用字符串键。
+    unsafe fn cf_key(name: &CStr) -> CFStringRef {
+        CFStringCreateWithCString(std::ptr::null(), name.as_ptr(), CF_STRING_ENCODING_UTF8)
+    }
 
     unsafe fn cf_bool(dict: CFDictionaryRef, key: CFStringRef) -> bool {
         if dict.is_null() || key.is_null() {
@@ -308,7 +309,9 @@ mod cf_proxy {
 
     unsafe fn cf_i32(number: CFNumberRef) -> i32 {
         let mut out: i32 = 0;
-        if unsafe { CFNumberGetValue(number, CF_NUMBER_SINT32_TYPE, &mut out as *mut i32 as *mut c_void) } != 0
+        if unsafe {
+            CFNumberGetValue(number, CF_NUMBER_SINT32_TYPE, &mut out as *mut i32 as *mut c_void)
+        } != 0
         {
             out
         } else {
@@ -341,7 +344,7 @@ mod cf_proxy {
         port: CFStringRef,
         scheme: &str,
     ) -> Option<String> {
-        if !cf_bool(dict, enable) {
+        if enable.is_null() || host.is_null() || port.is_null() || !cf_bool(dict, enable) {
             return None;
         }
         let host_val = CFDictionaryGetValue(dict, host);
@@ -361,35 +364,49 @@ mod cf_proxy {
         super::parse_proxy_url(&raw).ok()
     }
 
+    unsafe fn proxy_from_names(
+        dict: CFDictionaryRef,
+        enable: &CStr,
+        host: &CStr,
+        port: &CStr,
+        scheme: &str,
+    ) -> Option<String> {
+        let e = cf_key(enable);
+        let h = cf_key(host);
+        let p = cf_key(port);
+        let found = proxy_from(dict, e, h, p, scheme);
+        if !e.is_null() {
+            CFRelease(e);
+        }
+        if !h.is_null() {
+            CFRelease(h);
+        }
+        if !p.is_null() {
+            CFRelease(p);
+        }
+        found
+    }
+
     pub fn system_proxy() -> Option<String> {
         unsafe {
             let dict = CFNetworkCopySystemProxySettings();
             if dict.is_null() {
                 return None;
             }
-            let found = proxy_from(
+            let found = proxy_from_names(
                 dict,
-                kCFNetworkProxiesHTTPEnable,
-                kCFNetworkProxiesHTTPProxy,
-                kCFNetworkProxiesHTTPPort,
+                CStr::from_bytes_with_nul_unchecked(b"HTTPEnable\0"),
+                CStr::from_bytes_with_nul_unchecked(b"HTTPProxy\0"),
+                CStr::from_bytes_with_nul_unchecked(b"HTTPPort\0"),
                 "http",
             )
             .or_else(|| {
-                proxy_from(
+                proxy_from_names(
                     dict,
-                    kCFNetworkProxiesHTTPSEnable,
-                    kCFNetworkProxiesHTTPSProxy,
-                    kCFNetworkProxiesHTTPSPort,
+                    CStr::from_bytes_with_nul_unchecked(b"HTTPSEnable\0"),
+                    CStr::from_bytes_with_nul_unchecked(b"HTTPSProxy\0"),
+                    CStr::from_bytes_with_nul_unchecked(b"HTTPSPort\0"),
                     "http",
-                )
-            })
-            .or_else(|| {
-                proxy_from(
-                    dict,
-                    kCFNetworkProxiesSOCKSEnable,
-                    kCFNetworkProxiesSOCKSProxy,
-                    kCFNetworkProxiesSOCKSPort,
-                    "socks5",
                 )
             });
             CFRelease(dict);
@@ -397,6 +414,7 @@ mod cf_proxy {
         }
     }
 }
+
 
 #[cfg(test)]
 mod tests {
