@@ -1,8 +1,9 @@
 //! iOS / 本机代理配置。
 //!
 //! reqwest 的 `system-proxy` 只读 Windows 注册表和 `HTTP_PROXY` 一类环境变量。
-//! iOS 上既没有这些环境变量，Shadowrocket 的 VPN/规则模式也看不到「先解析再钉死 IP」
-//! 的直连，所以默认改为自动检测本机 HTTP 代理（小火箭默认 `127.0.0.1:1082`）。
+//! iOS 已改走系统 URLSession：自动模式跟随系统 VPN（小火箭点「连接」即可），
+//! 不再主动探测并强制使用 `127.0.0.1:1082`，以免和隧道叠在一起反而访问失败。
+//! 只有用户手动填写，或系统 Wi-Fi 代理不是本机回环地址时，才设置 HTTP/SOCKS 代理。
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use std::net::{SocketAddr, TcpStream};
@@ -137,10 +138,24 @@ pub fn effective_proxy() -> Option<(String, &'static str)> {
     }
 }
 
+fn is_loopback_proxy(url: &str) -> bool {
+    Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|h| matches!(h.as_str(), "127.0.0.1" | "localhost" | "::1" | "[::1]"))
+}
+
 fn detect_auto() -> Option<(String, &'static str)> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     if let Some(url) = cf_system_proxy() {
-        return Some((url, "system"));
+        // iOS 上 127.0.0.1 多半是小火箭本地端口：URLSession 应交给系统 VPN，
+        // 再叠一层本地 HTTP 代理容易把本来能直连的请求绕进节点后失败。
+        if !(cfg!(target_os = "ios") && is_loopback_proxy(&url)) {
+            return Some((url, "system"));
+        }
+    }
+    if cfg!(target_os = "ios") {
+        return None;
     }
     if let Some(url) = probe_local_cached() {
         return Some((url, "local"));

@@ -50,7 +50,7 @@ export default function ProxyPicker({ open, onClose }: { open: boolean; onClose:
       const next = await api.proxySet(mode, url);
       setState(next);
       setManual(next.url || url || manual);
-      toast(mode === "off" ? "已关闭本地代理" : next.effective ? `已使用 ${next.effective}` : "已保存，未检测到本机代理", "ok");
+      toast(mode === "off" ? "已关闭本地代理" : mode === "auto" ? "已跟随系统网络（含小火箭 VPN）" : next.effective ? `已使用 ${next.effective}` : "已保存", "ok");
     } catch (e) {
       toast((e as Error).message || "保存代理设置失败", "info");
     } finally {
@@ -74,7 +74,7 @@ export default function ProxyPicker({ open, onClose }: { open: boolean; onClose:
       <div className="flex-1 scroll-y px-3 pb-4">
         <div className="rounded-(--r-md) bg-s2 divide-y divide-s3 overflow-hidden">
           <ModeRow mode="auto" current={state?.mode === "auto"} disabled={saving}
-            title="自动检测" desc="读取系统代理，并探测 Shadowrocket 默认端口 1082"
+            title="跟随系统" desc="走系统网络和小火箭 VPN，不强制使用 1082 本地端口"
             onPick={(m) => { void save(m, state?.url); }} />
           <ModeRow mode="off" current={state?.mode === "off"} disabled={saving}
             title="关闭" desc="不走本机 HTTP/SOCKS 代理，仅保留直连或系统 TUN"
@@ -84,7 +84,7 @@ export default function ProxyPicker({ open, onClose }: { open: boolean; onClose:
             onPick={(m) => { if (m === "manual") setState((s) => s ? { ...s, mode: "manual" } : s); }} />
         </div>
 
-        {(state?.mode === "manual" || state?.mode === "auto") && (
+        {(state?.mode === "manual") && (
           <div className="mt-3 px-1">
             <div className="text-[10.5px] font-semibold text-dim tracking-wide mb-1.5">代理地址</div>
             <input
