@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api, isMobile, type ProxyState } from "../api";
 import { useStore } from "../store";
 import { Modal, Sheet } from "./ui";
-import { ICheck, IClose, ILink, IRefresh } from "../icons";
+import { ICheck, IClose, ILink } from "../icons";
 
 type Mode = ProxyState["mode"];
 
@@ -97,24 +97,16 @@ export default function ProxyPicker({ open, onClose }: { open: boolean; onClose:
               className="w-full h-9 px-3 rounded-(--r-sm) bg-s2 text-[12.5px] text-on outline-none"
             />
             <div className="flex items-center gap-2 mt-2">
-              {state?.mode === "manual" && (
-                <button disabled={saving || !manual.trim()} onClick={() => { void save("manual", manual.trim()); }}
-                  className="h-8 px-3 rounded-(--r-sm) bg-primary text-[12px] text-on-primary pressable disabled:opacity-50">
-                  保存并使用
-                </button>
-              )}
-              {state?.mode === "auto" && (
-                <button disabled={saving} onClick={() => { void save("auto", manual.trim()); }}
-                  className="h-8 px-3 rounded-(--r-sm) bg-s4 text-[12px] text-on pressable disabled:opacity-50 inline-flex items-center gap-1">
-                  <IRefresh size={12} />重新检测
-                </button>
-              )}
+              <button disabled={saving || !manual.trim()} onClick={() => { void save("manual", manual.trim()); }}
+                className="h-8 px-3 rounded-(--r-sm) bg-primary text-[12px] text-on-primary pressable disabled:opacity-50">
+                保存并使用
+              </button>
             </div>
           </div>
         )}
 
         <div className="text-[10px] text-dim leading-relaxed px-1 mt-4">
-          iOS 版网络请求不走浏览器代理。使用 Shadowrocket 时请先打开小火箭，再选「自动检测」；若改过端口，请手动填写 HTTP 地址。
+          iOS 版网络请求不走浏览器代理。使用 Shadowrocket 时请先打开并连接小火箭，本地代理保持「跟随系统」即可；若要用 1082 或自定义端口，请手动填写 HTTP 地址。
         </div>
       </div>
     </div>
