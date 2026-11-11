@@ -231,7 +231,7 @@ pub fn status() -> Value {
         .as_ref()
         .map(|s| s.mode)
         .unwrap_or_else(default_mode);
-    let url = settings.map(|s| s.url).unwrap_or_default();
+    let url = settings.as_ref().map(|s| s.url.clone()).unwrap_or_default();
     let effective = effective_proxy();
     json!({
         "mode": mode.as_str(),
