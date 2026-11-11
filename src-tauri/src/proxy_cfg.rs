@@ -1,9 +1,9 @@
 //! iOS / 本机代理配置。
 //!
 //! reqwest 的 `system-proxy` 只读 Windows 注册表和 `HTTP_PROXY` 一类环境变量。
-//! iOS 已改走系统 URLSession：自动模式跟随系统 VPN（小火箭点「连接」即可），
-//! 不再主动探测并强制使用 `127.0.0.1:1082`，以免和隧道叠在一起反而访问失败。
-//! 只有用户手动填写，或系统 Wi-Fi 代理不是本机回环地址时，才设置 HTTP/SOCKS 代理。
+//! iOS 已改走系统 URLSession，对齐官方安卓：默认不设应用层代理，流量交给系统 VPN。
+//! 「跟随系统」只读取 CFNetwork 里系统公布的代理（和小火箭/Safari 一致），
+//! 不再探测 1082 等本地端口，以免把「代理共享」误当成隧道入口。
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use std::net::{SocketAddr, TcpStream};
@@ -47,11 +47,8 @@ struct ProxySettings {
 }
 
 fn default_mode() -> ProxyMode {
-    if cfg!(target_os = "ios") {
-        ProxyMode::Auto
-    } else {
-        ProxyMode::Off
-    }
+    // 与官方安卓一致：不主动套本地 HTTP 代理，由系统 VPN/TUN 接管。
+    ProxyMode::Off
 }
 
 static SETTINGS: Lazy<Mutex<ProxySettings>> = Lazy::new(|| {
@@ -66,7 +63,7 @@ static PROBE_CACHE: Lazy<Mutex<(Option<Instant>, Option<String>)>> =
 
 const PROBE_TTL: Duration = Duration::from_secs(15);
 
-/// 启动时读取落盘的代理设置；文件不存在则使用平台默认（iOS 为自动检测）。
+/// 启动时读取落盘的代理设置；文件不存在则默认关闭（与官方安卓一致）。
 pub fn bind(dir: &Path) {
     let path = dir.join("proxy.json");
     if let Ok(text) = std::fs::read_to_string(&path) {
@@ -138,21 +135,12 @@ pub fn effective_proxy() -> Option<(String, &'static str)> {
     }
 }
 
-fn is_loopback_proxy(url: &str) -> bool {
-    Url::parse(url)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
-        .is_some_and(|h| matches!(h.as_str(), "127.0.0.1" | "localhost" | "::1" | "[::1]"))
-}
-
 fn detect_auto() -> Option<(String, &'static str)> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     if let Some(url) = cf_system_proxy() {
-        // iOS 上 127.0.0.1 多半是小火箭本地端口：URLSession 应交给系统 VPN，
-        // 再叠一层本地 HTTP 代理容易把本来能直连的请求绕进节点后失败。
-        if !(cfg!(target_os = "ios") && is_loopback_proxy(&url)) {
-            return Some((url, "system"));
-        }
+        // 系统公布的代理（含小火箭写入的本机端口）按 Safari 同样方式使用；
+        // iOS 不再额外探测 1082，避免把未启用的「代理共享」强行套上。
+        return Some((url, "system"));
     }
     if cfg!(target_os = "ios") {
         return None;

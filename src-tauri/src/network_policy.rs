@@ -113,7 +113,12 @@ pub fn allowed_ip(ip: IpAddr) -> bool {
                 return allowed_ip(IpAddr::V4(v4));
             }
             let s = ip.segments();
-            // 仅全球单播；拒绝 ULA、链路本地、回环、组播、NAT64，以及可封装私网 IPv4 的 6to4/Teredo。
+            // Clash / Shadowrocket 的 fake-ip-range6 常用 ULA（fc00::/7，例如 fd00::/18）。
+            // 官方严格模式原先整段拒绝，科学上网时会误杀（上游 issue #25、#30）。
+            if (s[0] & 0xfe00) == 0xfc00 {
+                return true;
+            }
+            // 仅全球单播；拒绝链路本地、回环、组播、NAT64，以及可封装私网 IPv4 的 6to4/Teredo。
             (s[0] & 0xe000) == 0x2000
                 && s[0] != 0x2002
                 && !(s[0] == 0x2001 && (s[1] < 0x0200 || s[1] == 0x0db8))
@@ -162,7 +167,7 @@ fn check_ip(ip: IpAddr) -> Result<(), String> {
     if allowed_ip(ip) {
         Ok(())
     } else {
-        Err("禁止访问普通内网、回环或保留地址（仅放行 FakeIP 198.18.0.0/15）".into())
+        Err("禁止访问普通内网、回环或保留地址（仅放行 FakeIP 198.18.0.0/15 与 IPv6 ULA）".into())
     }
 }
 
@@ -280,6 +285,9 @@ mod tests {
             "198.19.255.255",
             "2606:4700:4700::1111",
             "::ffff:198.18.0.1",
+            "fc00::1",
+            "fd00::1",
+            "fd00:ffff::1",
         ] {
             assert!(allowed_ip(ip.parse().unwrap()), "{ip}");
         }
@@ -305,7 +313,6 @@ mod tests {
             "255.255.255.255",
             "::",
             "::1",
-            "fc00::1",
             "fe80::1",
             "ff02::1",
             "::ffff:127.0.0.1",

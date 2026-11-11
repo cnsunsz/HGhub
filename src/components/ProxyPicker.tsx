@@ -74,10 +74,10 @@ export default function ProxyPicker({ open, onClose }: { open: boolean; onClose:
       <div className="flex-1 scroll-y px-3 pb-4">
         <div className="rounded-(--r-md) bg-s2 divide-y divide-s3 overflow-hidden">
           <ModeRow mode="auto" current={state?.mode === "auto"} disabled={saving}
-            title="跟随系统" desc="走系统网络和小火箭 VPN，不强制使用 1082 本地端口"
+            title="跟随系统" desc="只使用系统公布的代理，并交给小火箭 VPN 接管；不探测 1082"
             onPick={(m) => { void save(m, state?.url); }} />
           <ModeRow mode="off" current={state?.mode === "off"} disabled={saving}
-            title="关闭" desc="不走本机 HTTP/SOCKS 代理，仅保留直连或系统 TUN"
+            title="关闭" desc="与官方安卓一致：不设本地代理，只走直连或系统 VPN"
             onPick={(m) => { void save(m, state?.url); }} />
           <ModeRow mode="manual" current={state?.mode === "manual"} disabled={saving}
             title="手动填写" desc="适用于自定义端口，例如 http://127.0.0.1:1082"
@@ -106,7 +106,7 @@ export default function ProxyPicker({ open, onClose }: { open: boolean; onClose:
         )}
 
         <div className="text-[10px] text-dim leading-relaxed px-1 mt-4">
-          iOS 版网络请求不走浏览器代理。使用 Shadowrocket 时请先打开并连接小火箭，本地代理保持「跟随系统」即可；若要用 1082 或自定义端口，请手动填写 HTTP 地址。
+          iOS 版网络请求不走浏览器代理。使用 Shadowrocket 时请先打开并连接小火箭，本地代理保持默认「关闭」（与安卓相同）；只有系统或你需要本地端口时，再选「跟随系统」或手动填写。
         </div>
       </div>
     </div>

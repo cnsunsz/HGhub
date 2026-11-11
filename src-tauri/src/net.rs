@@ -15,12 +15,12 @@
 //! * 即使开了 `system-proxy`，PAC（`AutoConfigURL`）也不被支持，只认固定代理。
 //! * Android 没有注册表可读，系统「Wi-Fi 代理」同样不被 reqwest 采用；
 //!   安卓上只有 VPN/TUN 模式（VpnService 抓全流量）才有效。
-//! * iOS 同样没有环境变量/注册表。Shadowrocket 等工具的本地 HTTP 代理
-//!   （默认 `127.0.0.1:1082`）不会被自动采用；若再把 DNS 结果钉死到 reqwest，
-//!   小火箭按域名分流会失效。iOS 默认改为自动检测本机代理，见 `proxy_cfg`。
+//! * iOS 同样没有环境变量/注册表。官方安卓只靠 VpnService/TUN 接管流量，
+//!   不读系统 HTTP 代理。iOS 用系统 URLSession 对齐这一行为：默认不设本地代理，
+//!   不钉死 DNS，HTTP 走 TCP（不用 HTTP/3），让小火箭 VPN 像安卓一样接管。
 //!
 //! 排查手段：环境变量 `HGHUB_PROXY=http://127.0.0.1:7897` 可强制指定代理，
-//! 也可在设置里选「自动检测」或手动填写；`net_diag` 会输出 DNS/HTTP/代理快照。
+//! 也可在设置里选「跟随系统」或手动填写；`net_diag` 会输出 DNS/HTTP/代理快照。
 
 use crate::network_policy;
 use base64::engine::general_purpose::STANDARD as B64;

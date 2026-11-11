@@ -104,6 +104,11 @@ int32_t hghub_ios_http(const char *method,
         req.timeoutInterval = timeout_sec > 0 ? timeout_sec : 20;
         req.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
         req.HTTPShouldHandleCookies = NO;
+        // 与官方安卓 reqwest（TCP HTTP/1.1 或 HTTP/2）对齐：不走 QUIC/HTTP3，
+        // 小火箭等隧道对 UDP 支持较差时，HTTP3 会表现为「开 VPN 反而失败」。
+        if (@available(iOS 14.0, *)) {
+            req.assumesHTTP3Capable = NO;
+        }
 
         if (header_block && header_block[0]) {
             NSString *block = [NSString stringWithUTF8String:header_block];
@@ -135,7 +140,7 @@ int32_t hghub_ios_http(const char *method,
         cfg.timeoutIntervalForResource = req.timeoutInterval + 5;
         cfg.HTTPCookieStorage = nil;
         cfg.URLCache = nil;
-        cfg.connectionProxyDictionary = nil;
+        // 不主动清空系统代理字典：无手动代理时交给系统 VPN / CFNetwork，和 Safari 一致。
 
         if (proxy_host && proxy_host[0] && proxy_port > 0 && proxy_port <= 65535) {
             NSString *host = [NSString stringWithUTF8String:proxy_host];
