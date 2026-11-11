@@ -58,8 +58,6 @@ static NSString *hghub_ios_error(NSError *error) {
         case NSURLErrorServerCertificateUntrusted:
         case NSURLErrorServerCertificateHasUnknownRoot:
             return @"HTTPS 证书校验失败";
-        case NSURLErrorProxyConnectionFailed:
-            return @"代理连接失败";
         default:
             break;
     }
