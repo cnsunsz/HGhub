@@ -205,13 +205,124 @@ pub fn refresh_client() {
     }
 }
 
+#[cfg(target_os = "ios")]
+fn header_map(pairs: &[(String, String)]) -> reqwest::header::HeaderMap {
+    let mut map = reqwest::header::HeaderMap::new();
+    for (k, v) in pairs {
+        let Ok(name) = reqwest::header::HeaderName::from_bytes(k.as_bytes()) else {
+            continue;
+        };
+        let Ok(value) = reqwest::header::HeaderValue::from_str(v) else {
+            continue;
+        };
+        map.append(name, value);
+    }
+    map
+}
+
+/// 平台统一的 HTTP 响应。iOS 走系统 URLSession，其它平台仍用 reqwest。
+#[derive(Debug, Clone)]
+pub struct HttpResponse {
+    status: reqwest::StatusCode,
+    headers: reqwest::header::HeaderMap,
+    body: Vec<u8>,
+}
+
+impl HttpResponse {
+    pub fn status(&self) -> reqwest::StatusCode {
+        self.status
+    }
+
+    pub fn headers(&self) -> &reqwest::header::HeaderMap {
+        &self.headers
+    }
+
+    pub async fn bytes(self) -> Result<Vec<u8>, String> {
+        Ok(self.body)
+    }
+
+    pub async fn text(self) -> Result<String, String> {
+        Ok(String::from_utf8_lossy(&self.body).into_owned())
+    }
+
+    pub async fn json<T: serde::de::DeserializeOwned>(self) -> Result<T, String> {
+        serde_json::from_slice(&self.body).map_err(|e| e.to_string())
+    }
+}
+
+async fn send_once(
+    method: &str,
+    raw: &str,
+    accept: Option<&str>,
+    referer: Option<&str>,
+    body: Option<&[u8]>,
+    content_type: Option<&str>,
+    extra_headers: &[(String, String)],
+    timeout: Duration,
+) -> Result<HttpResponse, String> {
+    let mut headers: Vec<(String, String)> = vec![("User-Agent".into(), UA.to_string())];
+    if let Some(value) = accept {
+        headers.push(("Accept".into(), value.to_string()));
+    }
+    if let Some(value) = referer {
+        headers.push(("Referer".into(), value.to_string()));
+    }
+    if let Some(value) = content_type {
+        headers.push(("Content-Type".into(), value.to_string()));
+    }
+    headers.extend(extra_headers.iter().cloned());
+
+    #[cfg(target_os = "ios")]
+    {
+        let target = network_policy::parse_target(raw)?;
+        let proxy = proxy_override();
+        let raw = crate::ios_http::send(
+            method,
+            target.as_str(),
+            &headers,
+            body,
+            timeout,
+            proxy.as_deref(),
+        )
+        .await?;
+        let status = reqwest::StatusCode::from_u16(raw.status).map_err(|_| "HTTP 状态码无效")?;
+        return Ok(HttpResponse {
+            status,
+            headers: header_map(&raw.headers),
+            body: raw.body,
+        });
+    }
+
+    #[cfg(not(target_os = "ios"))]
+    {
+        let (target, http) = client_for(raw).await?;
+        let method: reqwest::Method = method.parse().map_err(|_| "请求方法无效")?;
+        let mut request = http.request(method, target).timeout(timeout);
+        for (k, v) in &headers {
+            request = request.header(k.as_str(), v.as_str());
+        }
+        if let Some(body) = body {
+            request = request.body(body.to_vec());
+        }
+        let response = request.send().await.map_err(|e| err_text(&e))?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.bytes().await.map_err(|e| err_text(&e))?.to_vec();
+        Ok(HttpResponse {
+            status,
+            headers,
+            body,
+        })
+    }
+}
+
 /// 不可信 GET 的统一入口；自动重定向被关闭，每一跳重新检查 URL、DNS 并固定解析地址。
 pub async fn get(
     raw: &str,
     timeout: Duration,
     accept: Option<&str>,
     referer: Option<&str>,
-) -> Result<reqwest::Response, String> {
+) -> Result<HttpResponse, String> {
     tokio::time::timeout(timeout, async {
         let policy_error = |phase: &str, error: String| {
             crate::playback_log::record("network.target_failed", json!({"resource": crate::playback_log::resource_id(raw), "phase": phase, "error_kind": crate::playback_log::error_kind(&error)}));
@@ -220,16 +331,9 @@ pub async fn get(
         let mut next = network_policy::parse_target(raw).map_err(|e| policy_error("parse", e))?;
         for hop in 0..=5 {
             let resolving = Instant::now();
-            let (target, http) = client_for(next.as_str()).await.map_err(|e| policy_error("dns_or_client", e))?;
+            let target = network_policy::parse_target(next.as_str()).map_err(|e| policy_error("dns_or_client", e))?;
             crate::playback_log::record("network.target_ready", json!({"resource": crate::playback_log::resource_id(raw), "target_resource": crate::playback_log::resource_id(target.as_str()), "dns_or_client_ms": resolving.elapsed().as_millis() as u64, "hop": hop}));
-            let mut request = http.get(target.clone()).timeout(timeout);
-            if let Some(value) = accept {
-                request = request.header("Accept", value);
-            }
-            if let Some(value) = referer {
-                request = request.header("Referer", value);
-            }
-            let response = request.send().await.map_err(|e| err_text(&e))?;
+            let response = send_once("GET", next.as_str(), accept, referer, None, None, &[], timeout).await.map_err(|e| policy_error("dns_or_client", e))?;
             if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
                 return Ok(response);
             }
@@ -539,20 +643,26 @@ pub async fn edge(
             let mut gateway = "other";
             let result = async {
                 let mut next = network_policy::parse_target(&url)?;
+                let body = serde_json::to_vec(&envelope).map_err(|e| e.to_string())?;
                 for hop in 0..=5 {
-                    let (target, client) = client_for(next.as_str()).await?;
+                    let target = network_policy::parse_target(next.as_str())?;
                     target_host = target.host_str().unwrap_or("").to_string();
-                    let mut req = client
-                        .post(target.clone())
-                        .header("Accept", "application/json")
-                        .header("Referer", &referer)
-                        .json(&envelope);
+                    let mut extra = Vec::new();
                     if let Some(t) = token.as_deref() {
                         if !t.is_empty() {
-                            req = req.header("Authorization", format!("Bearer {t}"));
+                            extra.push(("Authorization".into(), format!("Bearer {t}")));
                         }
                     }
-                    let resp = req.send().await.map_err(|e| err_text(&e))?;
+                    let resp = send_once(
+                        "POST",
+                        next.as_str(),
+                        Some("application/json"),
+                        Some(&referer),
+                        Some(&body),
+                        Some("application/json"),
+                        &extra,
+                        Duration::from_secs(20),
+                    ).await?;
                     let status = resp.status();
                     status_code = Some(status.as_u16());
                     headers_ms = Some(started.elapsed().as_millis() as u64);
@@ -572,7 +682,7 @@ pub async fn edge(
                         next = edge_redirect_target(&target, status.as_u16(), location, guest_get)?;
                         continue;
                     }
-                    let text = resp.text().await.map_err(|e| err_text(&e))?;
+                    let text = resp.text().await?;
                     if status.as_u16() == 401 || status.as_u16() == 403 {
                         return Err("401".to_string());
                     }
@@ -651,7 +761,7 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
                     .get(reqwest::header::CONTENT_TYPE)
                     .and_then(|v| v.to_str().ok())
                     .map(|s| s.to_string());
-                let bytes = resp.bytes().await.map_err(|e| err_text(&e))?.to_vec();
+                let bytes = resp.bytes().await?;
                 Ok((ctype, bytes))
             }.await;
             crate::playback_log::record("network.end", json!({"request": request, "resource": resource, "attempt": attempt, "status": status, "headers_ms": headers_ms, "elapsed_ms": started.elapsed().as_millis() as u64, "bytes": result.as_ref().ok().map(|(_, bytes)| bytes.len()), "error_kind": result.as_ref().err().map(|e: &String| crate::playback_log::error_kind(e))}));

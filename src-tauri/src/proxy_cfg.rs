@@ -102,8 +102,8 @@ pub fn parse_proxy_url(raw: &str) -> Result<String, String> {
         return Err("代理地址含控制字符".into());
     }
     let url = Url::parse(raw).map_err(|_| "代理地址无效")?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err("代理请使用 http 地址，例如 http://127.0.0.1:1082".into());
+    if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h") {
+        return Err("代理请使用 http 或 socks5 地址，例如 http://127.0.0.1:1082".into());
     }
     if url.host().is_none() || url.host_str().is_some_and(|h| h.is_empty()) {
         return Err("代理缺少主机名".into());
@@ -123,11 +123,14 @@ pub fn effective_proxy() -> Option<(String, &'static str)> {
     if let Some(url) = env_override() {
         return Some((url, "env"));
     }
-    let settings = SETTINGS.lock().ok()?;
-    match settings.mode {
+    let (mode, url) = {
+        let settings = SETTINGS.lock().ok()?;
+        (settings.mode, settings.url.clone())
+    };
+    match mode {
         ProxyMode::Off => None,
         ProxyMode::Manual => {
-            let url = parse_proxy_url(&settings.url).ok()?;
+            let url = parse_proxy_url(&url).ok()?;
             Some((url, "manual"))
         }
         ProxyMode::Auto => detect_auto(),
@@ -173,8 +176,12 @@ fn probe_local_now() -> Option<String> {
         ("http", 1082),
         ("http", 6152),
         ("http", 7890),
+        ("socks5", 1080),
+        ("socks5", 1081),
+        ("socks5", 6153),
+        ("socks5", 7891),
     ];
-    let timeout = Duration::from_millis(120);
+    let timeout = Duration::from_millis(400);
     let mut handles = Vec::new();
     for (scheme, port) in CANDIDATES {
         let scheme = *scheme;
@@ -226,12 +233,16 @@ pub fn set_proxy(mode: &str, url: Option<&str>) -> Result<Value, String> {
 }
 
 pub fn status() -> Value {
-    let settings = SETTINGS.lock().ok();
-    let mode = settings
-        .as_ref()
-        .map(|s| s.mode)
-        .unwrap_or_else(default_mode);
-    let url = settings.as_ref().map(|s| s.url.clone()).unwrap_or_default();
+    let (mode, url) = {
+        let settings = SETTINGS.lock().ok();
+        (
+            settings
+                .as_ref()
+                .map(|s| s.mode)
+                .unwrap_or_else(default_mode),
+            settings.as_ref().map(|s| s.url.clone()).unwrap_or_default(),
+        )
+    };
     let effective = effective_proxy();
     json!({
         "mode": mode.as_str(),
@@ -423,7 +434,7 @@ mod tests {
     #[test]
     fn proxy_urls_are_validated() {
         assert!(parse_proxy_url("http://127.0.0.1:1082").is_ok());
-        assert!(parse_proxy_url("socks5://127.0.0.1:1080").is_err());
+        assert!(parse_proxy_url("socks5://127.0.0.1:1080").is_ok());
         assert!(parse_proxy_url("ftp://127.0.0.1:21").is_err());
         assert!(parse_proxy_url("file:///tmp/x").is_err());
         assert!(parse_proxy_url("http://127.0.0.1:1082\u{0007}").is_err());

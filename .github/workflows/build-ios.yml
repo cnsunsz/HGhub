@@ -65,6 +65,8 @@ jobs:
             /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$plist" 2>/dev/null || true
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$plist"
             /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$plist"
+            /usr/libexec/PlistBuddy -c "Delete :NSLocalNetworkUsageDescription" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :NSLocalNetworkUsageDescription string 用于检测并连接本机 Shadowrocket、Surge 等代理端口" "$plist"
           done
         env:
           APPLE_DEVELOPMENT_TEAM: "ABCDE12345"

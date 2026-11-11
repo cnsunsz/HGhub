@@ -142,7 +142,7 @@ pub async fn check_update() -> Result<Value, String> {
         return Err(format!("GitHub 返回 HTTP {status}"));
     }
 
-    let v: Value = resp.json().await.map_err(|e| crate::net::err_text(&e))?;
+    let v: Value = resp.json().await?;
     let tag = v
         .get("tag_name")
         .and_then(|x| x.as_str())

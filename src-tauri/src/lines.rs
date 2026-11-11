@@ -111,7 +111,7 @@ async fn get_text(url: &str) -> Result<String, String> {
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
-    resp.text().await.map_err(|e| crate::net::err_text(&e))
+    resp.text().await
 }
 
 /// 从 HTML 里挑出脚本地址（发布页只有一个 `publish.js?<版本>`）。

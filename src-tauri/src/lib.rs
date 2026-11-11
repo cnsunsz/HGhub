@@ -4,6 +4,8 @@ mod logging;
 #[cfg(target_os = "macos")]
 mod macos_titlebar;
 mod media;
+#[cfg(target_os = "ios")]
+mod ios_http;
 mod net;
 mod network_policy;
 mod proxy_cfg;
