@@ -15,9 +15,12 @@
 //! * 即使开了 `system-proxy`，PAC（`AutoConfigURL`）也不被支持，只认固定代理。
 //! * Android 没有注册表可读，系统「Wi-Fi 代理」同样不被 reqwest 采用；
 //!   安卓上只有 VPN/TUN 模式（VpnService 抓全流量）才有效。
+//! * iOS 同样没有环境变量/注册表。Shadowrocket 等工具的本地 HTTP 代理
+//!   （默认 `127.0.0.1:1082`）不会被自动采用；若再把 DNS 结果钉死到 reqwest，
+//!   小火箭按域名分流会失效。iOS 默认改为自动检测本机代理，见 `proxy_cfg`。
 //!
 //! 排查手段：环境变量 `HGHUB_PROXY=http://127.0.0.1:7897` 可强制指定代理，
-//! `net_diag` 命令会输出 DNS/HTTP/环境变量快照。
+//! 也可在设置里选「自动检测」或手动填写；`net_diag` 会输出 DNS/HTTP/代理快照。
 
 use crate::network_policy;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -112,12 +115,14 @@ pub const UA: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 /// 手动指定代理（排查 / 公司内网用）：`HGHUB_PROXY=http://127.0.0.1:7897`。
-/// 不设时交给 reqwest 的 `system-proxy` 探测（注册表 + 环境变量）。
+/// 不设时：iOS 走设置里的自动/手动代理；其它平台交给 reqwest 的 `system-proxy`。
 fn proxy_override() -> Option<String> {
-    std::env::var("HGHUB_PROXY")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+    crate::proxy_cfg::effective_proxy().map(|(url, _)| url)
+}
+
+/// 走 HTTP/SOCKS 代理或 iOS 上不要把 DNS 钉死，否则小火箭只能看到目标 IP，域名规则失效。
+pub fn should_resolve_and_pin(strict: bool, has_proxy: bool) -> bool {
+    strict && !has_proxy && !cfg!(target_os = "ios")
 }
 
 /// 按**当前**系统代理设置新建一个客户端。
@@ -125,7 +130,7 @@ fn proxy_override() -> Option<String> {
 /// 注意：reqwest 的 `system-proxy` 只在构建时读一次注册表 / 环境变量。代理软件被关掉后，
 /// 旧客户端仍会往 `127.0.0.1:7897` 建隧道，症状是满屏 `tunnel error: failed to create
 /// underlying connection`（浏览器却是通的，因为它每次都重读系统代理）。所以这里允许重建。
-fn build_client(host: &str, addrs: &[SocketAddr]) -> Result<reqwest::Client, String> {
+fn build_client(host: &str, addrs: &[SocketAddr], proxy: Option<&str>) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
         .user_agent(UA)
         .timeout(Duration::from_secs(20))
@@ -138,9 +143,9 @@ fn build_client(host: &str, addrs: &[SocketAddr]) -> Result<reqwest::Client, Str
     if !addrs.is_empty() {
         builder = builder.resolve_to_addrs(host, addrs);
     }
-    if let Some(p) = proxy_override() {
+    if let Some(p) = proxy {
         // 错误信息不能含原始代理 URL（其中可能有用户名/密码）。
-        let proxy = reqwest::Proxy::all(&p).map_err(|_| "HGHUB_PROXY 配置无效（已隐藏原始值）")?;
+        let proxy = reqwest::Proxy::all(p).map_err(|_| "代理配置无效（已隐藏原始值）")?;
         builder = builder.proxy(proxy);
     }
     builder
@@ -166,19 +171,20 @@ async fn client_for(raw: &str) -> Result<(url::Url, Arc<reqwest::Client>), Strin
     let target = network_policy::parse_target_with_mode(raw, strict)?;
     let host = target.host_str().ok_or("目标缺少主机名")?;
     let port = target.port_or_known_default().ok_or("目标端口无效")?;
-    let key = format!("{strict}:{host}:{port}");
+    let proxy = proxy_override();
+    let key = format!("{strict}:{host}:{port}:{}", proxy.as_deref().unwrap_or("-"));
     {
         let cache = CLIENTS.lock().map_err(|_| "HTTP 客户端锁失败")?;
         if let Some(http) = cached_client(&cache, &key, Instant::now()) {
             return Ok((target, http));
         }
     }
-    let addrs = if strict {
+    let addrs = if should_resolve_and_pin(strict, proxy.is_some()) {
         network_policy::resolve_target(&target, strict).await?
     } else {
         Vec::new()
     };
-    let http = Arc::new(build_client(host, &addrs)?);
+    let http = Arc::new(build_client(host, &addrs, proxy.as_deref())?);
     let now = Instant::now();
     let mut cache = CLIENTS.lock().map_err(|_| "HTTP 客户端锁失败")?;
     // 同时到达的请求可能已完成解析；不延长已有结果的有效期。
@@ -372,8 +378,9 @@ pub async fn diagnose() -> Value {
             "HTTPS_PROXY": std::env::var("HTTPS_PROXY").ok().map(|p| redact_proxy(&p)),
             "ALL_PROXY": std::env::var("ALL_PROXY").ok().map(|p| redact_proxy(&p)),
             "NO_PROXY": std::env::var("NO_PROXY").ok().map(|_| "[已配置，列表已隐藏]"),
-            "HGHUB_PROXY": proxy_override().map(|p| redact_proxy(&p)),
+            "HGHUB_PROXY": std::env::var("HGHUB_PROXY").ok().filter(|s| !s.trim().is_empty()).map(|p| redact_proxy(&p)),
         },
+        "proxy": crate::proxy_cfg::status(),
     })
 }
 
@@ -791,6 +798,13 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn dns_pin_is_skipped_when_proxy_is_set() {
+        assert_eq!(should_resolve_and_pin(true, false), !cfg!(target_os = "ios"));
+        assert!(!should_resolve_and_pin(true, true));
+        assert!(!should_resolve_and_pin(false, false));
+    }
+
     fn proxy_credentials_and_query_are_redacted() {
         assert_eq!(
             redact_proxy("http://alice:p%40ss@127.0.0.1:7897/path?token=secret#hidden"),

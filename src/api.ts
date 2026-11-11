@@ -68,8 +68,12 @@ export const api = {
       base: string;
       strict_security?: boolean;
       cli_relaxed?: boolean;
+      proxy?: ProxyState;
     }>("app_boot"),
   securitySet: (strict: boolean) => call<boolean>("security_set", { strict }),
+  proxyState: () => call<ProxyState>("proxy_state"),
+  proxySet: (mode: ProxyState["mode"], url?: string) =>
+    call<ProxyState>("proxy_set", { mode, url: url || null }),
   login: (username: string, password: string) =>
     call<{ user: User }>("api_login", { username, password }),
   register: (username: string, password: string, email = "") =>
@@ -136,6 +140,16 @@ export type LineItem = { name?: string; url: string; host?: string };
 export type LineState = { base: string; default: string; fixed: LineItem[] };
 export type LineMirrors = { source: string; script?: string; items: LineItem[] };
 export type LineProbe = { url: string; ok: boolean; status?: number; ms: number; error?: string };
+
+export type ProxyState = {
+  mode: "auto" | "off" | "manual";
+  url: string;
+  effective: string | null;
+  source: "env" | "manual" | "system" | "local" | null;
+  default_mode: "auto" | "off";
+  env_override?: boolean;
+};
+
 
 /** `https://a.b/c` → `a.b`（线路展示用） */
 export const hostOf = (url: string) => {

@@ -6,6 +6,7 @@ mod macos_titlebar;
 mod media;
 mod net;
 mod network_policy;
+mod proxy_cfg;
 mod playback_log;
 mod session;
 
@@ -57,6 +58,7 @@ pub fn run() {
                 let _ = std::fs::create_dir_all(&dir);
                 // 上次选择的线路（设置 → 线路）在启动时恢复
                 net::bind_base(&dir);
+                proxy_cfg::bind(&dir);
                 playback_log::bind(&dir);
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
@@ -137,6 +139,8 @@ pub fn run() {
             playback_log::playback_log_write,
             playback_log::playback_log_read,
             api::security_set,
+            api::proxy_state,
+            api::proxy_set,
             api::debug_log,
             api::net_diag,
             api::line_state,

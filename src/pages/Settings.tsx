@@ -3,6 +3,7 @@ import { api, APP_VERSION, hostOf, logLine, platform, type UpdateInfo } from "..
 import { useStore } from "../store";
 import { Modal, Toggle } from "../components/ui";
 import LinePicker from "../components/LinePicker";
+import ProxyPicker from "../components/ProxyPicker";
 import { copyPlaybackLog, initPlaybackLog, setPlaybackLog, usePlaybackLog } from "../playbackDiagnostics";
 import { IBack, IBoltF, IBroom, IChevR, IHeart, IInfo, ILink, ILockF, IMoon, IRefresh, ISettings, ISun, IVolMute } from "../icons";
 
@@ -14,7 +15,9 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
   const [clearOpen, setClearOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [lineOpen, setLineOpen] = useState(false);
+  const [proxyOpen, setProxyOpen] = useState(false);
   const [lineBase, setLineBase] = useState("");
+  const [proxyLabel, setProxyLabel] = useState("");
   const [checking, setChecking] = useState(false);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const playbackLog = usePlaybackLog();
@@ -23,7 +26,15 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
   const readLine = () => {
     api.lineState().then((s) => setLineBase(s.base)).catch(() => {});
   };
-  useEffect(readLine, []);
+  const readProxy = () => {
+    api.proxyState().then((s) => {
+      if (s.effective) setProxyLabel(s.effective);
+      else if (s.mode === "auto") setProxyLabel("自动检测");
+      else if (s.mode === "manual") setProxyLabel("手动");
+      else setProxyLabel("已关闭");
+    }).catch(() => {});
+  };
+  useEffect(() => { readLine(); readProxy(); }, []);
   useEffect(() => { void initPlaybackLog(); }, []);
 
   const checkUpdate = async () => {
@@ -112,6 +123,14 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
               <div className="flex-1 min-w-0">
                 <div className="text-[12.5px] text-on">线路</div>
                 <div className="text-[10.5px] text-mut truncate">{lineBase ? hostOf(lineBase) : "固定线路 1（默认）"}</div>
+              </div>
+              <IChevR size={15} className="text-mut" />
+            </button>
+            <button onClick={() => setProxyOpen(true)} className="w-full flex items-center gap-3 px-3.5 py-3 text-left pressable">
+              <span className="w-8 h-8 rounded-full bg-s3 flex items-center justify-center text-primary"><ILink size={16} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12.5px] text-on">本地代理</div>
+                <div className="text-[10.5px] text-mut truncate">{proxyLabel || "用于 Shadowrocket 等工具"}</div>
               </div>
               <IChevR size={15} className="text-mut" />
             </button>
@@ -206,6 +225,7 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
       </div>
 
       <LinePicker open={lineOpen} onClose={() => { setLineOpen(false); readLine(); }} />
+      <ProxyPicker open={proxyOpen} onClose={() => { setProxyOpen(false); readProxy(); }} />
 
       <Modal open={about} onClose={() => setAbout(false)} width={392}>
         <div className="p-5">

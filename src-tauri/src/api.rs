@@ -296,6 +296,7 @@ pub async fn app_boot(state: State<'_, Api>) -> Result<Value, String> {
         "base": origin,
         "strict_security": crate::network_policy::strict_security(),
         "cli_relaxed": crate::network_policy::cli_strict_override() == Some(false),
+        "proxy": crate::proxy_cfg::status(),
     }))
 }
 
@@ -309,6 +310,21 @@ pub async fn security_set(strict: bool) -> Result<bool, String> {
         json!({"strict": crate::network_policy::strict_security()}),
     );
     Ok(crate::network_policy::strict_security())
+}
+
+/// 读取当前代理模式及实际生效的代理（已脱敏）。
+#[tauri::command]
+pub async fn proxy_state() -> Result<Value, String> {
+    Ok(crate::proxy_cfg::status())
+}
+
+/// 切换代理模式并落盘：`auto` / `off` / `manual`。手动模式需要合法的代理 URL。
+#[tauri::command]
+pub async fn proxy_set(mode: String, url: Option<String>) -> Result<Value, String> {
+    let status = crate::proxy_cfg::set_proxy(&mode, url.as_deref())?;
+    crate::net::refresh_client();
+    crate::playback_log::record("proxy.mode_changed", status.clone());
+    Ok(status)
 }
 
 #[tauri::command]
