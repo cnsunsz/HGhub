@@ -17,7 +17,9 @@
 //!   安卓上只有 VPN/TUN 模式（VpnService 抓全流量）才有效。
 //! * iOS 同样没有环境变量/注册表。官方安卓只靠 VpnService/TUN 接管流量，
 //!   不读系统 HTTP 代理。iOS 用系统 URLSession 对齐这一行为：默认不设本地代理，
-//!   不钉死 DNS，HTTP 走 TCP（不用 HTTP/3），让小火箭 VPN 像安卓一样接管。
+//!   并显式关闭 CFNetwork 系统 HTTPS 代理（否则会跟随小火箭下发的本地代理，
+//!   报 kCFErrorHTTPSProxyConnectionFailure / 310），不钉死 DNS，HTTP 走 TCP
+//!   （不用 HTTP/3），让流量以普通 TCP 进入小火箭 VPN，与官方安卓一致。
 //!
 //! 排查手段：环境变量 `HGHUB_PROXY=http://127.0.0.1:7897` 可强制指定代理，
 //! 也可在设置里选「跟随系统」或手动填写；`net_diag` 会输出 DNS/HTTP/代理快照。

@@ -61,6 +61,11 @@ static NSString *hghub_ios_error(NSError *error) {
         default:
             break;
     }
+    // 310 = kCFErrorHTTPSProxyConnectionFailure，306 = kCFErrorHTTPProxyConnectionFailure
+    if ([error.domain isEqualToString:(NSString *)kCFErrorDomainCFNetwork]
+        && (error.code == 310 || error.code == 306)) {
+        return @"系统 HTTPS 代理连接失败，请将本地代理保持关闭";
+    }
     if (error.localizedDescription.length) {
         return error.localizedDescription;
     }
@@ -140,7 +145,6 @@ int32_t hghub_ios_http(const char *method,
         cfg.timeoutIntervalForResource = req.timeoutInterval + 5;
         cfg.HTTPCookieStorage = nil;
         cfg.URLCache = nil;
-        // 不主动清空系统代理字典：无手动代理时交给系统 VPN / CFNetwork，和 Safari 一致。
 
         if (proxy_host && proxy_host[0] && proxy_port > 0 && proxy_port <= 65535) {
             NSString *host = [NSString stringWithUTF8String:proxy_host];
@@ -166,6 +170,18 @@ int32_t hghub_ios_http(const char *method,
                     @"HTTPSPort": port
                 };
             }
+        } else {
+            // 默认「关闭」必须显式关掉 CFNetwork 的 HTTP/HTTPS/SOCKS/PAC。
+            // 只把 connectionProxyDictionary 留空时，URLSession 仍会跟随小火箭
+            // VPN 下发的本地 HTTPS 代理。该代理不可用时就会报
+            // kCFErrorHTTPSProxyConnectionFailure (310)。
+            // 关掉后请求以普通 TCP 进入 Packet Tunnel，与官方安卓 VpnService 一致。
+            cfg.connectionProxyDictionary = @{
+                @"HTTPEnable": @NO,
+                @"HTTPSEnable": @NO,
+                @"SOCKSEnable": @NO,
+                @"ProxyAutoConfigEnable": @NO
+            };
         }
 
         static HgNoRedirect *redirects;
